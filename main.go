@@ -49,6 +49,7 @@ import (
 )
 
 type config struct {
+	LogLevel                      zerolog.Level
 	EnableLeaderElection          bool
 	MetricsBindAddress            string
 	LeaderElectionNamespace       string
@@ -76,13 +77,6 @@ type tinkerbellClientResult struct {
 }
 
 func main() {
-	// Set up logging before any log calls so all startup messages are visible.
-	zl := zerolog.New(os.Stdout).Level(zerolog.InfoLevel).With().Caller().Timestamp().Logger()
-	ctrl.SetLogger(zerologr.New(&zl))
-	klog.SetLogger(ctrl.Log)
-
-	log := ctrl.Log.WithName("setup")
-
 	fs := flag.NewFlagSet("capt", flag.ExitOnError)
 	initKlogFlags(fs)
 
@@ -93,6 +87,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+
+	logger := newLogger(cfg.LogLevel)
+	ctrl.SetLogger(logger)
+	klog.SetLogger(logger)
+	log := ctrl.Log.WithName("setup")
 
 	if cfg.WatchNamespace != "" {
 		log.Info("Watching cluster-api objects only in namespace for reconciliation", "namespace", cfg.WatchNamespace)
@@ -254,6 +253,12 @@ func addHealthChecks(mgr ctrl.Manager) error {
 }
 
 func (c *config) initFlags(fs *flag.FlagSet) { //nolint:funlen
+	fs.TextVar(&c.LogLevel,
+		"log-level",
+		zerolog.InfoLevel,
+		"Log level (default info). Debug includes controller verbosity V(4).",
+	)
+
 	fs.StringVar(
 		&c.MetricsBindAddress,
 		"metrics-bind-addr",
@@ -369,6 +374,18 @@ func (c *config) initFlags(fs *flag.FlagSet) { //nolint:funlen
 		"/var/run/secrets/external-tinkerbell/kubeconfig",
 		"Path to a kubeconfig file for an external Tinkerbell cluster.",
 	)
+}
+
+func newLogger(level zerolog.Level) logr.Logger {
+	// zerologr maps V(n) to level 1-n. Include the existing V(4)
+	// diagnostics when debug or more verbose logging is requested.
+	if level <= zerolog.DebugLevel {
+		level = zerolog.Level(1 - 4)
+	}
+	zerolog.SetGlobalLevel(level)
+	zl := zerolog.New(os.Stdout).Level(level).With().Caller().Timestamp().Logger()
+
+	return zerologr.New(&zl)
 }
 
 // initKlogFlags registers klog flags and opts into the new klog behavior so
